@@ -2,6 +2,27 @@
 //Author: Ian Johnson
 //Free software and all that, just say where you got it from
 
+/*TODO:
+ * Look at other TODOs in code
+ * Remove commits and re-commit to make sure there isn't any sensitive data in the commit chain. BACK STUFF UP FIRST!!!
+ * !addmeme overhaul (Done for now)
+ * !removememe
+ * !addreact, !removereact, !viewreact
+ * More code overhaul (file splitup, etc)
+ * Get linter setup
+ * package.json update
+ */
+
+
+//Discord.js stuff
+const { Client, Intents, CommandInteractionOptionResolver } = require('discord.js');
+const client = new Client({intents: ['GUILDS', 'GUILD_MESSAGES']});
+
+//file stuff
+const fs = require('fs');	//file-reading stuff
+const MEME_DELIMITER = String.fromCharCode(0x1E);	//Delimit each meme with a record separator ASCII character. This should be uncommon enough to not appear in any memes added
+var fd;				//File descriptor (See if different ones should be used for reading and writing to prevent locking)
+var buffer = [];		//Used for reading data from streams
 
 const responses = [
 	'It is certain',
@@ -37,81 +58,196 @@ const fortunes = [
 	'Extremely unlucky'];
 
 
-//Discord.js stuff
-const Discord = require('discord.js');
-const client = new Discord.Client();
-
-//file stuff
-const fs = require('fs');	//file-reading stuff
-const MEME_DELIMITER = String.fromCharCode(0x1E);	//Delimit each meme with a record separator ASCII character. This should be uncommon enough to not appear in any memes added
-var fd;				//File descriptor (See if different ones should be used for reading and writing to prevent locking)
-var memes;			//array that holds our memes. Lol
-var buffer = [];		//Used for reading data from streams
-
-
-//get the token
-var token;
-fd = fs.createReadStream('token.txt');
-fd.on('data', (data) => {
-	buffer += data;
-});
-fd.on('end', () => {
-	token = buffer.slice(0, buffer.length - 1);	//Copies the data we received from the stream into the token, removing the newline char
-	buffer = [];				//Empty our buffer
-	client.login(token);			//Now that we have the token, we can login
-});
-fd.on('error', (err) => {
-	console.log(err.stack);
-});
-
-//read stream into data buffer, when separator is read, copy everything up to the separator, add it to the memes array
-//	Be sure to loop in case there were multiple separators in the chunk
-
-function checkIfMemeInList(meme) {
-	//binary search the list of memes
-	let a = 0, b = memes.length - 1;
-	let middle;
-	while (a <= b) {
-		middle = Math.floor((a + b) / 2);
-		if (meme < memes[middle])
-			b = middle - 1;
-		else if (meme > memes[middle])
-			a = middle + 1;
-		else
-			return middle;
+//First thing we need to do is get the token
+fs.readFile('token.txt', 'utf-8', (err, data) => {
+	if (err) throw err;
+	else {
+		let token = data.substring(0, data.length - 1);
+		client.login(token);
 	}
-	return -1;
-}
+});
 
 
-function addMemeToList(meme) {
-	//add meme to file
-	let stream = fs.createWriteStream('memes.txt', {flags: 'a'});
-	stream.write(MEME_DELIMITER + meme);
-	stream.end();
-	//add meme to sorted array
-	let i;
-	for (i = memes.length - 1; i >= 0, memes[i] > meme; i--)
-		memes[i + 1] = memes[i];
-	memes[i + 1] = meme;
+function setUpMemeGuildSubfolders() {
+	//Make sure the root meme folder exists, create it if it doesnt
+	//TODO: We could probably move the creation of these folders into an "Added to server" event
+	fs.access('memes/', fs.constants.R_OK | fs.constants.W_OK, err => {
+		if (err) {
+			fs.mkdir('memes/', err => {
+				if (err) throw err;
+			});
+		}
+	});
+
+	//Make sure meme subfolders for all guilds exist
+	let i = 0;
+	for (let g of client.guilds.cache.map(guild => guild.id)) {
+		//Open the meme subfolder for this guild or create it if it doesn't exist
+		fs.access(`memes/${g}/`, fs.constants.R_OK | fs.constants.W_OK, err => {
+			if (err) {
+				fs.mkdir(`memes/${g}/`, err => {
+					if (err) throw err;
+				});
+			}
+		});
+	}
 }
 
 
 client.once('ready', () => {
-	//TODO: Convert this into a stream to hopefully optimize speed more (Since it's a fairly large file.)
-	memes = fs.readFileSync('memes.txt', 'utf8').split(MEME_DELIMITER);
-	memes.sort();
-	console.log('Boolin');
-})
+	//setUpMemeGuildSubfolders();
+	const onlineTime = new Date();
+	console.log(`Bot online @ ${onlineTime.getTime()}`);
+});
 
 
-client.on('message', message => {
+function memeHandler(gid, callback) {
+	//Open meme guild subfolder
+	//Get a list of the available files, pick a random one, open it
+	//Get list of meme deliminter indices, pick a random one, return the meme at that location
+	//NOTE: When we originally split up the big meme file with the python script, it complained about some illegal characters. Using the latin-1 charset seemed to fix this
+		//However, if we use that here, stuff like emojis get jarbled up. Utf-8 seems to work perfectly here, so we'll stick with that for now
+	fs.readdir(`memes/${gid}/`, (err, files) => {
+		if (err) return callback(err);
+
+		fs.readFile(`memes/${gid}/${files[Math.floor(Math.random() * files.length)]}`, 'utf-8', (err, data) => {
+			if (err) {
+				if (err.code != 'ENOENT')
+					return callback(err);
+				else
+					return callback(null, '');
+			}
+
+			//I think for now these files will be manageable enough to read the entirety of one
+			let meme_list = data.split(MEME_DELIMITER);
+			callback(null, meme_list == [] ? '' : meme_list[Math.floor(Math.random() * meme_list.length)]);
+		});
+	});
+}
+
+
+function getMemeDelimiterIndices(meme_list) {
+	//We need to know where the beginning and end of the list is, so we'll add those ourselves
+	let meme_delimiter_indices = [0];
+	let i = 0;
+	for (const c of meme_list) {
+		if (c === MEME_DELIMITER)
+			meme_delimiter_indices.push(i);
+		i++;
+	}
+	meme_delimiter_indices.push(meme_list.length);
+	return meme_delimiter_indices;
+}
+
+
+function getMemeDBSize(gid, callback) {
+	let currMemeDBSize = 0;
+	fs.readdir(`memes/${gid}/`, (err, files) => {
+		if (err) return callback(err, -1);
+		let i = 0;
+		files.forEach((file) => {
+			//There's surely a better way to handle this, would probably be cleaner with promises/async
+			//But the basic idea is that we avoid synchronous IO, but only return once every file has been confirmed stat'd
+			fs.stat(`memes/${gid}/${file}`, (err2, stats) => {
+				if (err2) return callback(err2, -1);
+				currMemeDBSize += stats.size;	//Should be <256Kb, will check with size of new meme
+				i++;
+				if (i == files.length)
+					return callback(null, currMemeDBSize);
+			});
+		});
+	});
+}
+
+
+//0 - Meme added, 1 - Meme already in list, 2 - Adding meme would go over DB size for guild, -1 - something bad happened
+//TODO: Test that the list is sorted correctly in that adding the same meme won't work
+	//If it's being weird, MAYBE try latin-1
+function addMemeHandler(gid, meme, callback) {
+	//To pretend for one second that more than 5 servers will ever use this, let's impose a 256kB limit for now on how much meme text there can be.
+	//Feel like manually getting the size of a guild's meme DB should be cheap, but if it's ever an issue,
+		//we could have a JSON file with the current size to read from, and update it when a meme is added
+	getMemeDBSize(gid, (err, currMemeDBSize) => {
+		if (err) return callback(err, -1);
+
+		//console.log(`Current DB size is ${currMemeDBSize} bytes`);
+
+		//Open meme guild subfolder, then the file associated with the first byte of the meme
+		fs.readFile(`memes/${gid}/${meme.toString().charCodeAt(0)}`, 'utf-8', (err, data) => {
+			//^ Probably needs more work, just parse the byte to a decimal integer string
+			if (err) {
+				if (err.code === 'ENOENT') {
+					//If file doesn't exist, we can just create it, put the meme in there and call it a day
+					if (currMemeDBSize + meme.length > (256 * 1024))
+						return callback(null, 2);		//We could probably have a file that maps guild IDs to how many bytes of meme data they're allowed to have
+					
+					fs.writeFile(`memes/${gid}/${meme.toString().charCodeAt(0)}`, meme, (err) => {
+						if (err) return callback(err, -1);
+						return callback(null, 0);
+					});
+				}
+				else
+					return callback(err, -1);
+			}
+			else {
+				//If file does exist, we can binary search until either we find it, or we don't in which case we insert it at the final index
+				//Read the file to get the meme delimiter indices
+				let meme_delimiter_indices = getMemeDelimiterIndices(data);
+				let start = 0, end = meme_delimiter_indices.length - 2;		//We want to ignore the last delim position when searching since it's the end of the file
+				let mid = 0, pos = 0;	//determines, if we need to add the meme, whether to put it ahead of or behing the index
+
+				while (start <= end) {
+					mid = Math.floor((start + end) / 2);
+					//Deal with some edge cases related to delimiters at the beginning and end of the meme list
+					let a = (mid == 0 ? meme_delimiter_indices[mid] : meme_delimiter_indices[mid] + 1);
+					let b = meme_delimiter_indices[mid + 1];
+					let meme_check = data.slice(a, b);
+					if (meme === meme_check) {
+						return callback(null, 1);		//Meme's already in the list
+					}
+					else if (meme < meme_check) {
+						end = mid - 1;
+						pos = 0;
+					}
+					else {
+						start = mid + 1;
+						pos = 1;
+					}
+				}
+
+				//At this point, the meme isn't in the list, so we'll add it to whever the search left mid at
+				//Inserting the meme into the middle of the file is apparently more complicated since there's no fseek() equivalent
+				//Since file sizes should all be manageable, we'll just do array work and write it all as one thing
+				let new_meme_data = data.substring(0, meme_delimiter_indices[mid + pos]);	//Everything before new meme
+				let meme_data_after_insert = (start == 0 ? data : data.slice(meme_delimiter_indices[mid + pos] + 1));
+				if (mid + pos != 0)
+					new_meme_data = new_meme_data.concat(MEME_DELIMITER);
+				new_meme_data = new_meme_data.concat(meme);
+				if (meme_data_after_insert != '') {
+					new_meme_data = new_meme_data.concat(MEME_DELIMITER, meme_data_after_insert);
+				}
+
+				fs.open(`memes/${gid}/${meme.toString().charCodeAt(0)}`, 'w+', (err, fd) => {
+					if (err) return callback(err, -1);
+					fs.write(fd, new_meme_data, (err, written, str) => {
+						if (err) return callback(err, -1);
+						fs.close(fd, (err) => { if (err) return callback(err, -1) });
+						return callback(null, 0);
+					});
+				});
+			}
+		});
+	});
+}
+
+
+client.on('messageCreate', message => {
 	//DEBUG: log data to console
-	//console.log(`${message.author.id}`);
+	//console.log(`Message received from guild ${message.guild.id}`);
 
-	//randomly react a message, for comedic effect
-	//EDIT: Whatever version of Discord.js I currently have right now won't let reactions happen, so sending a standard message will just have to suffice for the time being
-	if (Math.floor(Math.random() * 50) == 0) {
+	//randomly reply with funny emotes, for comedic effect
+	//TODO: More general list of emote reacts. Each should have a uniform chance of being the one
+	if (message.channel.guild == 612430900000718850 && Math.floor(Math.random() * 50) == 0) {
 		switch (Math.floor(Math.random() * 2)) {
 		case 0:
 			message.channel.send('<:virgin:612839782019629086>');
@@ -122,8 +258,7 @@ client.on('message', message => {
 		}
 	}
 
-	//asking the bot a question
-	//only respond if the bot was @'d
+	//asking the bot a question, only respond if we were @'d
 	if (message.mentions.users.first() != undefined) {
 		if (message.mentions.users.first().username === 'magiceightbot') {
 			switch (Math.floor(Math.random() * 2)) {
@@ -143,24 +278,52 @@ client.on('message', message => {
 		roll_command = message.content.split(' '); //put the command and its arguments in an array
 		//The second first (and only) argument of the array should be the number of digits generated (1-9, 9 by default)
 		if (roll_command.length == 1)
-			message.channel.send(Math.round(Math.random() * 1000000000));
+			message.channel.send(Math.round(Math.random() * 1000000000).toString());
 		else if (roll_command.length == 2) {
 			let roll_count = parseInt(roll_command[1]);
 			if (roll_count != NaN && roll_count >= 1 && roll_count < 10)
-				message.channel.send(Math.round(Math.random() * (Math.pow(10, roll_command[1]))));
+				message.channel.send(Math.round(Math.random() * (Math.pow(10, roll_command[1]))).toString());
 		}
 	}
 	//meme command
-	else if (message.content === '!meme')
-		message.channel.send(memes[Math.floor(Math.random() * memes.length)]);
+	else if (message.content === '!meme') {
+		memeHandler(message.guild.id, (err, meme) => {
+			if (err) throw err;
+			else if (meme != '')
+				message.channel.send(meme);
+			else
+				message.channel.send('**Nothing here yet...**');
+		});
+	}
 	//add meme command
 	else if (message.content.length >= 9 && message.content.substring(0, 8) === '!addmeme') {
-		var memeinquestion = message.content.substring(9, message.content.length);
-		if (checkIfMemeInList(memeinquestion) != -1)
-			message.channel.send(`\"${memeinquestion}\" is already in the list`);
+		//Need to test that adding a meme we know is already in the list fails, to ensure string comparison is the same. Otherwise we'll get fals positives/negatives
+		if (message.content.includes(MEME_DELIMITER) == 1)
+			message.channel.send('Meme contains illegal character and has been ignored');
 		else {
-			addMemeToList(memeinquestion);
-			message.channel.send(`\"${memeinquestion}\" has been added to the list`);
+			let memeinquestion = message.content.substring(9, message.content.length);
+			addMemeHandler(message.guild.id, memeinquestion, (err, ret) => {
+				if (err) {
+					message.channel.send('**Something inconceivable happened (check log)**');
+					throw err;
+				}
+				else {
+					switch (ret) {
+					case 0:
+						message.channel.send(`\"${memeinquestion}\" has been added to the list`);
+						break;
+					case 1:
+						message.channel.send(`\"${memeinquestion}\" is already in the list`);
+						break;
+					case 2:
+						message.channel.send(`**Server will be over its 256KB data limit, so meme has been ignored**`);
+						break;
+					default:
+						message.channel.send(`**Something inconceivable happened (${ret})**`);
+						break;
+					}
+				}
+			});
 		}
 	}
 	//fortune command
@@ -168,11 +331,25 @@ client.on('message', message => {
 		message.reply(`Your fortune for today is:\n**${fortunes[Math.floor(Math.random() * fortunes.length)]}**`);
 	//developer !test command to make sure binary search on strings works as intended
 	else if (message.content === '!test') {
-		let count = 0;
-		for (let i = 0; i < memes.length; i++) {
-			if (checkIfMemeInList(memes[i]) == -1)
-				count++;
-		}
-		console.log(`# of false negatives: ${count} / ${memes.length}`);
+		//TODO: Seems to be working, but test each guild folder to make sure there are no false positives / negatives when adding existing memes
 	}
+});
+
+
+client.on('guildCreate', guild => {
+	//Create meme subfolder, add meme DB size to file, create emote react file
+	fs.mkdir(`memes/${guild.id}/`, err => { if (err) throw err; });
+});
+
+
+client.on('guildDelete', guild => {
+	//Remove meme data and any other data we have that's associated with the guild
+	fs.rmdir(`memes/${guild.id}/`, (err) => { if (err) throw err; });
+});
+
+
+//TODO: Does this capture any error that we may not have caught? (Should do this to avoid undefined behavior)
+client.on('error', error => {
+	console.log(error);
+	process.kill(process.pid, 'SIGTERM');
 });

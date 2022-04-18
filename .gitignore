@@ -1,3 +1,4 @@
-memes.txt
+memes/
+memes_*.txt
 node_modules
 token.txt

@@ -1,3 +1,8 @@
+1.2 - //22
+-Huge overhaul on how memes are handled. Support for multiple servers is now supported - Each has their own separate meme database. I/O is a lot more scalable now.
+-General code improvement, although there's still work that needs to be done. More stuff is JSON-ified now.
+-!removememe feature???
+
 1.13 - 10/2/20
 -Changed the delimiter for memes in the memes.txt file to use a record separator ASCII character (0x1E) instead of " ". This will not only make the size of the file a little bit smaller but
 is also less likely to be included in any added memes.
