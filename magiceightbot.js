@@ -70,7 +70,6 @@ fs.readFile('token.txt', 'utf-8', (err, data) => {
 
 function setUpMemeGuildSubfolders() {
 	//Make sure the root meme folder exists, create it if it doesnt
-	//TODO: We could probably move the creation of these folders into an "Added to server" event
 	fs.access('memes/', fs.constants.R_OK | fs.constants.W_OK, err => {
 		if (err) {
 			fs.mkdir('memes/', err => {
@@ -105,8 +104,6 @@ function memeHandler(gid, callback) {
 	//Open meme guild subfolder
 	//Get a list of the available files, pick a random one, open it
 	//Get list of meme deliminter indices, pick a random one, return the meme at that location
-	//NOTE: When we originally split up the big meme file with the python script, it complained about some illegal characters. Using the latin-1 charset seemed to fix this
-		//However, if we use that here, stuff like emojis get jarbled up. Utf-8 seems to work perfectly here, so we'll stick with that for now
 	fs.readdir(`memes/${gid}/`, (err, files) => {
 		if (err) return callback(err);
 
@@ -161,8 +158,6 @@ function getMemeDBSize(gid, callback) {
 
 
 //0 - Meme added, 1 - Meme already in list, 2 - Adding meme would go over DB size for guild, -1 - something bad happened
-//TODO: Test that the list is sorted correctly in that adding the same meme won't work
-	//If it's being weird, MAYBE try latin-1
 function addMemeHandler(gid, meme, callback) {
 	//To pretend for one second that more than 5 servers will ever use this, let's impose a 256kB limit for now on how much meme text there can be.
 	//Feel like manually getting the size of a guild's meme DB should be cheap, but if it's ever an issue,
@@ -180,7 +175,7 @@ function addMemeHandler(gid, meme, callback) {
 					//If file doesn't exist, we can just create it, put the meme in there and call it a day
 					if (currMemeDBSize + meme.length > (256 * 1024))
 						return callback(null, 2);		//We could probably have a file that maps guild IDs to how many bytes of meme data they're allowed to have
-					
+
 					fs.writeFile(`memes/${gid}/${meme.toString().charCodeAt(0)}`, meme, (err) => {
 						if (err) return callback(err, -1);
 						return callback(null, 0);
@@ -246,7 +241,9 @@ client.on('messageCreate', message => {
 	//console.log(`Message received from guild ${message.guild.id}`);
 
 	//randomly reply with funny emotes, for comedic effect
-	//TODO: More general list of emote reacts. Each should have a uniform chance of being the one
+	//TODO: More general list of emote reacts for each server, instead of hard-coding like this. Each should have a uniform chance of being chosen
+		//If we can access the list of custom emotes, maybe just select from that actually
+		//But maybe add the ability to add general emotes too, if the server so chooses
 	if (message.channel.guild == 612430900000718850 && Math.floor(Math.random() * 50) == 0) {
 		switch (Math.floor(Math.random() * 2)) {
 		case 0:
@@ -275,8 +272,9 @@ client.on('messageCreate', message => {
 	}
 	//roll command
 	else if (message.content.substring(0, 5) === '!roll') {
+		//TODO: Garbage rolls like "NaN" with number args like "2e2" are still possible, so this needs more work
 		roll_command = message.content.split(' '); //put the command and its arguments in an array
-		//The second first (and only) argument of the array should be the number of digits generated (1-9, 9 by default)
+		//The first (and only) argument of the array should be the number of digits generated (1-9, 9 by default)
 		if (roll_command.length == 1)
 			message.channel.send(Math.round(Math.random() * 1000000000).toString());
 		else if (roll_command.length == 2) {
@@ -297,7 +295,6 @@ client.on('messageCreate', message => {
 	}
 	//add meme command
 	else if (message.content.length >= 9 && message.content.substring(0, 8) === '!addmeme') {
-		//Need to test that adding a meme we know is already in the list fails, to ensure string comparison is the same. Otherwise we'll get fals positives/negatives
 		if (message.content.includes(MEME_DELIMITER) == 1)
 			message.channel.send('Meme contains illegal character and has been ignored');
 		else {
@@ -331,7 +328,7 @@ client.on('messageCreate', message => {
 		message.reply(`Your fortune for today is:\n**${fortunes[Math.floor(Math.random() * fortunes.length)]}**`);
 	//developer !test command to make sure binary search on strings works as intended
 	else if (message.content === '!test') {
-		//TODO: Seems to be working, but test each guild folder to make sure there are no false positives / negatives when adding existing memes
+		//TODO: Seems to be working, but still need to test rigorously with each subfolder on each guild
 	}
 });
 
